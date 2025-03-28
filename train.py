@@ -11,7 +11,7 @@ import matplotlib.pyplot as plt
 from tqdm import tqdm
 from utils import *
 from cl_augmentations import *
-from model import ECG_CNN_Encoder
+from models import ECG_CNN_Encoder
 
 
 
