@@ -61,7 +61,6 @@ def set_seed(seed=42):
     torch.backends.cudnn.benchmark = False  # Avoids random algorithms for performance optimization
 
 
-
 class ECGDataset(Dataset):
     def __init__(self, signals, labels):
         self.signals = signals
@@ -129,6 +128,7 @@ def save_metrics(metrics_df, experiment_name, save_folder):
     metrics_df.to_csv(os.path.join(save_folder, f'{experiment_name}_metrics.csv'), index=False)
 
 
+
 # # Contrastive Loss Function
 # class NTXentLoss(nn.Module):
 #     def __init__(self, temperature=0.07):
@@ -153,6 +153,8 @@ def save_metrics(metrics_df, experiment_name, save_folder):
 #         loss = F.cross_entropy(sim_matrix, labels)
 #         return loss
     
+
+
 
 
 
@@ -320,3 +322,45 @@ def preprocess_magnitude_batch(magnitude_batch, method='zscore'):
     
     return magnitude_batch
 
+
+def set_seed(seed=42):
+    """
+    Set all random seeds to ensure reproducibility across runs.
+    """
+    torch.manual_seed(seed)  # For PyTorch
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed(seed)  # For CUDA (if using GPUs)
+        torch.cuda.manual_seed_all(seed)  # For multi-GPU setups
+    np.random.seed(seed)  # For NumPy
+    random.seed(seed)  # For Python's random module
+    torch.backends.cudnn.deterministic = True  # Ensures deterministic results
+    torch.backends.cudnn.benchmark = False  # Avoids random algorithms for performance optimization
+
+
+
+def preprocessing(row, max_amp):
+    data = {
+        'ECG_LEAD_I': row['full_lead_I'],
+        'ECG_LEAD_II': row['full_lead_II'],
+        'ECG_LEAD_III': row['full_lead_III'],
+        'ECG_LEAD_AVR': row['full_lead_AVR'],
+        'ECG_LEAD_AVL': row['full_lead_AVL'],
+        'ECG_LEAD_AVF': row['full_lead_AVF'],
+        'ECG_LEAD_V1': row['full_lead_V1'],
+        'ECG_LEAD_V2': row['full_lead_V2'],
+        'ECG_LEAD_V3': row['full_lead_V3'],
+        'ECG_LEAD_V4': row['full_lead_V4'],
+        'ECG_LEAD_V5': row['full_lead_V5'],
+        'ECG_LEAD_V6': row['full_lead_V6'],
+        'label': row['Responder'],
+        # 'mrn' : row['mrn']
+    }
+
+    def decode_and_normalize(arr, max_amp):
+        signal = arr[:5000].astype(np.float32) / max_amp
+        return signal - np.mean(signal)
+
+
+    ecg_leads = np.stack([decode_and_normalize(data[key], max_amp) for key in sorted(data.keys()) if key != 'label'], axis=0)
+
+    return ecg_leads, data['label']
