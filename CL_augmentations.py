@@ -4,45 +4,81 @@ import torch
 import torch
 import torch.nn.functional as F
 
-def time_warp_augmentation(ecg_batch, num_control_points=4, warp_strength=0.2, seed=None):
+def time_wrap_segments_augmentation(ecg_batch, m=4, warp_percent=0.2, seed=None):
     """
-    Applies time warping augmentation to ECG signals by stretching or compressing segments nonlinearly.
+    Applies time wrapping augmentation to ECG signals by stretching and squeezing alternating segments.
 
     Args:
-    - ecg_batch (torch.Tensor): A tensor of shape (batch_size, leads_num, signal_length)
-    - num_control_points (int): Number of control points for warping (default is 4)
-    - warp_strength (float): Maximum relative shift of time indices (default is 0.2)
-    - seed (int, optional): Random seed for reproducibility (default is None)
+    - ecg_batch (torch.Tensor): Tensor of shape (batch_size, leads, signal_length)
+    - m (int): Number of segments (must be even)
+    - warp_percent (float): Stretch/squeeze percentage (e.g., 0.2 = 20%)
+    - seed (int, optional): Seed for reproducibility
 
     Returns:
-    - augmented_batch (torch.Tensor): The time-warped ECG batch
+    - Tensor of the same shape as input, with time-warped ECG signals
+
+    Example: 
+    # Generate a dummy ECG signal
+    signal_length = 500
+    dummy_signal = torch.sin(torch.linspace(0, 8 * 3.14, steps=signal_length))  # Simulated waveform
+    ecg_batch = dummy_signal.unsqueeze(0).unsqueeze(0)  # (1, 1, signal_length)
+
+    # Apply augmentation
+    augmented = time_wrap_segments(ecg_batch, m=4, warp_percent=0.5, seed=42)
+
+    # Plot original vs augmented signal
+    plt.figure(figsize=(12, 4))
+    plt.plot(ecg_batch[0, 0].numpy(), label='Original Signal')
+    plt.plot(augmented[0, 0].numpy(), label='Time-Warped Signal', linestyle='--')
+    plt.legend()
+    plt.title("ECG Time Wrapping Augmentation")
+    plt.xlabel("Time")
+    plt.ylabel("Amplitude")
+    plt.grid(True)
+    plt.tight_layout()
+    plt.show()
+
     """
     if seed is not None:
         torch.manual_seed(seed)
-        if torch.cuda.is_available():
-            torch.cuda.manual_seed(seed)
+        random.seed(seed)
 
     batch_size, leads, signal_length = ecg_batch.shape
+    assert m % 2 == 0, "Number of segments (m) must be even"
+    segment_len = signal_length // m
+    output = torch.zeros_like(ecg_batch)
 
-    # Generate control points and their time shifts
-    control_points = torch.linspace(0, signal_length - 1, steps=num_control_points)
-    warp_offsets = (torch.rand(batch_size, leads, num_control_points) * 2 - 1) * warp_strength * signal_length
+    for b in range(batch_size):
+        for l in range(leads):
+            signal = ecg_batch[b, l]
+            segments = [signal[i*segment_len:(i+1)*segment_len] for i in range(m)]
 
-    # Apply time distortion by warping control points
-    warped_control_points = (control_points.unsqueeze(0).unsqueeze(0) + warp_offsets).clamp(0, signal_length - 1)
+            # Choose half of the segments to stretch
+            indices = list(range(m))
+            random.shuffle(indices)
+            stretch_ids = set(indices[:m//2])
+            new_segments = []
 
-    # Create interpolation grid
-    orig_time = torch.arange(signal_length).repeat(batch_size, leads, 1)  # (B, L, signal_length)
-    warped_time = F.interpolate(warped_control_points, size=signal_length, mode="linear", align_corners=True)
+            for i, seg in enumerate(segments):
+                if i in stretch_ids:
+                    new_len = int(len(seg) * (1 + warp_percent))
+                else:
+                    new_len = int(len(seg) * (1 - warp_percent))
 
-    # Interpolate ECG signals at warped time indices
-    augmented_batch = F.grid_sample(
-        ecg_batch.unsqueeze(1),  # Add a channel dimension
-        warped_time.unsqueeze(-1).unsqueeze(-1),  # Convert to 4D grid
-        mode="bilinear", align_corners=True
-    ).squeeze(1)  # Remove channel dimension
+                # Resize the segment
+                seg = seg.unsqueeze(0).unsqueeze(0)  # (1, 1, len)
+                resized = F.interpolate(seg, size=new_len, mode='linear', align_corners=False).squeeze()
 
-    return augmented_batch
+                new_segments.append(resized)
+
+            # Concatenate and interpolate back to original length
+            warped_signal = torch.cat(new_segments)
+            warped_signal = warped_signal.unsqueeze(0).unsqueeze(0)
+            restored = F.interpolate(warped_signal, size=signal_length, mode='linear', align_corners=False).squeeze()
+
+            output[b, l] = restored
+
+    return output
 
 
 
