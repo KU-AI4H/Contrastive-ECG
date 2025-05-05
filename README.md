@@ -5,7 +5,7 @@
 - Self-supervised pretraining of ECG signals using contrastive learning.
 - Pretrain on a massive unlabeled dataset.
 
-## Contrastive Augmentation Methods
+## Contrastive Augmentation Methods 
 
 - **Time Wrapping Augmentation**: Stretches and compresses alternating segments of ECG signals.
 - **Permutation Augmentation**: Divides each ECG signal into `m` segments, shuffles them, and concatenates them back together.
@@ -13,10 +13,11 @@
 - **Dropout Augmentation**: Randomly zeros out 10% of the positions in each lead of the ECG signals within a batch.
 - **Gaussian Noise Augmentation**: Adds Gaussian noise to each signal based on its magnitude.
 - **CLOCKS**: Based on Kiyasseh et al., *"Clocs: Contrastive learning of cardiac signals across space, time, and patients,"* International Conference on Machine Learning (ICML), PMLR, 2021.
+- Find them in `CL_augmentations.py`
 
-## Encoder Architectures
+## Encoder Architectures 
 
-- Implements various encoder architectures specifically designed for ECG time series:
+- Implements various encoder architectures specifically designed for ECG time series (`models.py`):
   - **CNN**
   - **CNN-LSTM**
   - **CNN-Attention-LSTM**
@@ -27,9 +28,9 @@
 - Add a classifier on top of the encoder.
 - Fine-tune the entire network using a limited labeled dataset.
 
-## Experimentation Strategy
+## Experimentation Strategy 
 
-Experiments follow a repeated random split strategy (K repetitions of train/validation/test splitting):
+Experiments (`train.py`) follow a repeated random split strategy (K repetitions of train/validation/test splitting):
 
 1. Randomly split the full dataset into train, validation, and test sets.
 2. Train the model on the training set.
