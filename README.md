@@ -1,40 +1,59 @@
 # Self-Supervised Pretraining of ECG Signals Using Contrastive Learning
 
-## Pretraining Phase
+This repository implements **self-supervised contrastive learning** for 12-lead ECG signals using various augmentation strategies and encoder architectures. After pretraining on massive unlabeled ECG data, the learned encoder is fine-tuned for a downstream **binary classification** task.
 
-- Self-supervised pretraining of ECG signals using contrastive learning.
-- Pretrain on a massive unlabeled dataset.
+---
 
-## Contrastive Augmentation Methods 
+## 🧪 Pretraining Phase
 
-- **Time Wrapping Augmentation**: Stretches and compresses alternating segments of ECG signals.
-- **Permutation Augmentation**: Divides each ECG signal into `m` segments, shuffles them, and concatenates them back together.
-- **Zero Masking Augmentation**: Sets consecutive segments of the ECG signal to zero.
-- **Dropout Augmentation**: Randomly zeros out 10% of the positions in each lead of the ECG signals within a batch.
-- **Gaussian Noise Augmentation**: Adds Gaussian noise to each signal based on its magnitude.
-- **CLOCKS**: Based on Kiyasseh et al., *"Clocs: Contrastive learning of cardiac signals across space, time, and patients,"* International Conference on Machine Learning (ICML), PMLR, 2021.
-- Find them in `CL_augmentations.py`
+- Self-supervised contrastive learning is performed using positive pairs from augmented views of the same ECG signal.
+- Training is done on a large **unlabeled ECG dataset** using NT-Xent (or similar) loss to bring representations of similar signals closer and dissimilar ones apart.
 
-## Encoder Architectures 
+---
 
-- Implements various encoder architectures specifically designed for ECG time series (`models.py`):
-  - **CNN**
-  - **CNN-LSTM**
-  - **CNN-Attention-LSTM**
-  - **CNN-Transformer**
+## 🔁 Contrastive Augmentation Strategies
 
-## Fine-Tuning Phase
+Defined in `CL_augmentations.py`, these augmentations provide diverse views of the same ECG signal:
 
-- Add a classifier on top of the encoder.
-- Fine-tune the entire network using a limited labeled dataset.
+- **Time Wrapping**: Alternating segments of the ECG are stretched or compressed to simulate temporal warping.
+- **Permutation**: ECG signals are split into `m` segments and randomly shuffled.
+- **Zero Masking**: Consecutive portions of the ECG are set to zero.
+- **Dropout Masking**: Randomly zeros out 10% of signal values per lead in each batch.
+- **Gaussian Noise**: Adds noise scaled to signal magnitude for robustness.
+- **CLOCKS Augmentation**: Implements spatial, temporal, and patient-level contrast based on [CLOCS (Kiyasseh et al., ICML 2021)](https://proceedings.mlr.press/v139/kiyasseh21a.html).
 
-## Experimentation Strategy 
+---
 
-Experiments (`train.py`) follow a repeated random split strategy (K repetitions of train/validation/test splitting):
+## 🧠 Encoder Architectures
 
-1. Randomly split the full dataset into train, validation, and test sets.
+Implemented in `models.py`, multiple encoders are supported to extract meaningful ECG representations:
+
+- 🧩 **CNN** – Temporal filters for local pattern learning.
+- 🔄 **CNN-LSTM** – Combines convolution with temporal memory.
+- 🧠 **CNN-Attention-LSTM** – Adds attention over LSTM outputs.
+- 🚀 **CNN-Transformer** – Combines convolutional front-end with self-attention layers.
+
+---
+
+## 🔄 Fine-Tuning Phase
+
+After pretraining:
+- A **classifier** is added on top of the pretrained encoder.
+- The full model is **fine-tuned end-to-end** using a limited labeled ECG dataset.
+
+---
+
+## 📊 Experimentation Strategy
+
+Implemented in `train.py`, all experiments follow a **repeated random sub-sampling protocol**:
+
+1. Randomly split patients into train, validation, and test sets.
 2. Train the model on the training set.
-3. Use the validation set to select the best-performing model.
-4. Evaluate the selected model on the held-out test set.
-5. Repeat the process K times with different random splits.
-6. Report the average and confidence interval of test performance across K runs.
+3. Use validation performance to select the best checkpoint.
+4. Evaluate on the held-out test set.
+5. Repeat the full process **K times** with different seeds.
+6. Report **mean ± confidence interval** for test performance.
+
+---
+
+
