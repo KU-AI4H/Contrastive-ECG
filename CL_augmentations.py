@@ -289,3 +289,27 @@ def mix_augmentation(ecg_batch, zero_percent=0.1, noise_factor=0.05, seed=42):
     augmented_batch[noise_indices] = gaussian_noise_augmentation(ecg_batch[noise_indices], noise_factor, seed=seed)
     
     return augmented_batch
+
+
+
+def nonoverlap_time_segmenting(ecg_batch):
+    """
+    Splits ECG signals into two non-overlapping halves along time and applies two independent augmentations.
+
+    Args:
+    - ecg_batch (torch.Tensor): Tensor of shape (B, leads, 5000)
+    - seed (int, optional): For reproducibility.
+
+    Returns:
+    - first_half (torch.Tensor): First half of shape (B, leads, 2500)
+    - second_half (torch.Tensor): Second half of shape (B, leads, 2500)
+    """
+
+    B, leads, T = ecg_batch.shape
+    assert T == 5000, "Expected input length of 5000"
+
+    # Split into two halves
+    first_half = ecg_batch[..., :2500]
+    second_half = ecg_batch[..., 2500:]
+
+    return first_half, second_half 
