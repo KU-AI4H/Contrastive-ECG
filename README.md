@@ -28,10 +28,10 @@ Defined in `CL_augmentations.py`, these augmentations provide diverse views of t
 
 Implemented in `models.py`, multiple encoders are supported to extract meaningful ECG representations:
 
-- 🧩 **CNN** – Temporal filters for local pattern learning.
-- 🔄 **CNN-LSTM** – Combines convolution with temporal memory.
-- 🧠 **CNN-Attention-LSTM** – Adds attention over LSTM outputs.
-- 🚀 **CNN-Transformer** – Combines convolutional front-end with self-attention layers.
+-  **CNN** – Temporal filters for local pattern learning.
+-  **CNN-LSTM** – Combines convolution with temporal memory.
+-  **CNN-Attention-LSTM** – Adds attention over LSTM outputs.
+-  **CNN-Transformer** – Combines convolutional front-end with self-attention layers.
 
 ---
 
