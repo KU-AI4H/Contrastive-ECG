@@ -30,6 +30,55 @@ class ECG_Classifier(nn.Module):
         out = self.classifier(x)  # Classifier prediction
         return out
 
+
+class ECG_CLOCKS_Classifier(nn.Module):
+    def __init__(self, encoder, embedded_size=256, num_classes=1, dropout=0.1, agg_func='cat'):
+        super(ECG_Classifier, self).__init__()
+        self.encoder = encoder  # Use pretrained encoder
+        self.agg_func = agg_func
+
+        if agg_func == 'cat':
+            final_emb_size = embedded_size * 2
+        else:
+            final_emb_size = embedded_size
+
+        if agg_func == 'attn':
+            self.attn_layer = nn.Sequential(
+                nn.Linear(embedded_size, 1),  # Project to scalar score
+                nn.Softmax(dim=0)  # Normalize over the 2 segments
+            )
+
+        self.classifier = nn.Sequential(
+            nn.Linear(final_emb_size, embedded_size),
+            nn.ReLU(),
+            nn.Dropout(dropout),
+            nn.Linear(embedded_size, num_classes),
+            nn.Sigmoid()  # Sigmoid for binary classification
+        )
+
+    def forward(self, x):
+        x1 = x[:, :, :2500]
+        x2 = x[:, :, 2500:]
+        x1, _ = self.encoder(x1)  # Get encoded features
+        x2, _ = self.encoder(x2)  # Get encoded features
+
+        if self.agg_func == 'cat':
+            x = torch.cat([x1, x2], dim=-1)
+        elif self.agg_func == 'sum':
+            x = x1 + x2
+        elif self.agg_func == 'mean':
+            x = (x1 + x2) / 2.0
+        elif self.agg_func == 'attn':
+            # Stack and apply attention
+            stacked = torch.stack([x1, x2], dim=1)  # Shape: (B, 2, D)
+            attn_weights = self.attn_layer(stacked)  # (B, 2, 1)
+            x = (stacked * attn_weights).sum(dim=1)  # Weighted sum: (B, D)    
+        else:
+            raise ValueError(f"Invalid aggregation function: {self.agg_func}")
+        out = self.classifier(x)  # Classifier prediction
+        return out
+
+
 #############################################
 
 class ECG_CNN_Encoder(nn.Module):
