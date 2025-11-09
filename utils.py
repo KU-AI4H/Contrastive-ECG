@@ -1,4 +1,4 @@
-import tensorflow as tf
+# import tensorflow as tf
 import torch
 import torch.nn as nn
 import torch.optim as optim
@@ -10,10 +10,7 @@ import glob
 import random
 import os
 from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score, roc_auc_score, precision_recall_curve, auc
-from sklearn.model_selection import train_test_split
-
 import matplotlib.pyplot as plt
-import csv
 import scipy.stats as stats
 
 
@@ -82,6 +79,19 @@ class ECGDataset(Dataset):
         label = torch.tensor(label, dtype=torch.float32)
         return signal, label
 
+class ECGDataset_pretrain(Dataset):
+    def __init__(self, signals):
+        self.signals = signals
+        print('-----some data statistics-----')
+        print(f'number of all samples: {len(self.signals)}')
+
+    def __len__(self):
+        return len(self.signals)
+
+    def __getitem__(self, idx):
+        signal = self.signals[idx]
+        signal = torch.tensor(signal, dtype=torch.float32)
+        return signal
 
 def compute_metrics(y_true, y_pred):
     y_pred_labels = (y_pred > 0.5).astype(int)
@@ -352,7 +362,7 @@ def preprocessing(row, max_amp):
         'ECG_LEAD_V4': row['full_lead_V4'],
         'ECG_LEAD_V5': row['full_lead_V5'],
         'ECG_LEAD_V6': row['full_lead_V6'],
-        'label': row['Responder'],
+        'label': row['abnormal'],
         # 'mrn' : row['mrn']
     }
 
@@ -364,3 +374,28 @@ def preprocessing(row, max_amp):
     ecg_leads = np.stack([decode_and_normalize(data[key], max_amp) for key in sorted(data.keys()) if key != 'label'], axis=0)
 
     return ecg_leads, data['label']
+
+def preprocessing_pretrain(row, max_amp):
+    data = {
+        'ECG_LEAD_I': row['full_lead_I'],
+        'ECG_LEAD_II': row['full_lead_II'],
+        'ECG_LEAD_III': row['full_lead_III'],
+        'ECG_LEAD_AVR': row['full_lead_AVR'],
+        'ECG_LEAD_AVL': row['full_lead_AVL'],
+        'ECG_LEAD_AVF': row['full_lead_AVF'],
+        'ECG_LEAD_V1': row['full_lead_V1'],
+        'ECG_LEAD_V2': row['full_lead_V2'],
+        'ECG_LEAD_V3': row['full_lead_V3'],
+        'ECG_LEAD_V4': row['full_lead_V4'],
+        'ECG_LEAD_V5': row['full_lead_V5'],
+        'ECG_LEAD_V6': row['full_lead_V6'],
+    }
+
+    def decode_and_normalize(arr, max_amp):
+        signal = arr[:5000].astype(np.float32) / max_amp
+        return signal - np.mean(signal)
+
+
+    ecg_leads = np.stack([decode_and_normalize(data[key], max_amp) for key in sorted(data.keys())], axis=0)
+
+    return ecg_leads
