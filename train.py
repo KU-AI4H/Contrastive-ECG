@@ -1,30 +1,32 @@
 #train
-
 import os
+import random
 import torch
 import torch.nn as nn
 import torch.optim as optim
-import numpy as np
-import pandas as pd
-from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score, roc_auc_score
-import matplotlib.pyplot as plt
 from tqdm import tqdm
 import pickle
 import pandas as pd
 import numpy as np
 import mlflow
 from models import ECG_CNN_Encoder, ECG_Classifier
+from utils import set_seed, preprocessing, preprocessing_pretrain, ECGDataset, ECGDataset_pretrain, DataLoader, NTXentLoss, ecg_to_frequency_domain, record_metrics, save_metrics, plot_metrics, calculate_confidence_interval_error
+from sklearn.model_selection import train_test_split
+from CL_augmentations import *
+import glob
 
-
-
-def main_train_test(pretrain_signals, pre_train_labels, data_df, embedded_size=64, kernel_size=15, dropout=0.1, CL_embedded_size=64, pretrain_num_epochs=50, num_epochs=70, print_results = False, save_results = False, plot_results = False, seed=42, cl_temp=0.07, augmentation1='dropout',  aug1_ratio=0.20, augmentation2='guassian_noise', aug2_ratio=0.15, domain ='time' , exp_name=None, encoder_name='CL_encoder', pre_batch_size=128, batch_size=12, pretrain_encoder_path=None, pretrain=True):
+def main_train_test(pretrain_df, data_df,
+                    embedded_size=64, kernel_size=15, dropout=0.1, CL_embedded_size=64, pretrain_num_epochs=50, num_epochs=70,
+                    print_results = False, save_results = False, plot_results = False, seed=42,
+                    cl_temp=0.07, augmentation1='dropout',  aug1_ratio=0.20, augmentation2='guassian_noise', aug2_ratio=0.15, domain ='time',
+                    exp_name=None, encoder_name='CL_encoder',
+                    pre_batch_size=128, batch_size=12, pretrain_encoder_path=None, pretrain=True):
 
     set_seed(seed=seed)
     print(f'-------------------------domain = {domain}')
 
     # Step 1: Compute majority label per patient
-    patient_labels = data_df.groupby('mrn')['Responder'].mean().round().astype(int)
-
+    patient_labels = data_df.groupby('mrn_pseudo')['abnormal'].mean().round().astype(int)
     # Step 2: First split: Train vs (Validation + Test)
     train_patients, temp_patients = train_test_split(
         patient_labels.index,
@@ -43,13 +45,16 @@ def main_train_test(pretrain_signals, pre_train_labels, data_df, embedded_size=6
     )
 
     # Step 4: Assign ECGs based on patient split
-    train_df = data_df[data_df['mrn'].isin(train_patients)]
-    val_df = data_df[data_df['mrn'].isin(val_patients)]
-    test_df = data_df[data_df['mrn'].isin(test_patients)]
+    train_df = data_df[data_df['mrn_pseudo'].isin(train_patients)]
+    val_df = data_df[data_df['mrn_pseudo'].isin(val_patients)]
+    test_df = data_df[data_df['mrn_pseudo'].isin(test_patients)]
+
+    if pretrain:
+        pretrain_df = pretrain_df[~pretrain_df['mrn_pseudo'].isin(list(test_patients)+list(val_patients))]
 
     # (Optional) If you want to drop duplicate ECGs for each patient (keep first)
-    val_df = val_df.drop_duplicates(subset='mrn', keep='first')
-    test_df = test_df.drop_duplicates(subset='mrn', keep='first')
+    val_df = val_df.drop_duplicates(subset='mrn_pseudo', keep='first')
+    test_df = test_df.drop_duplicates(subset='mrn_pseudo', keep='first')
 
 
     #############################
@@ -71,12 +76,27 @@ def main_train_test(pretrain_signals, pre_train_labels, data_df, embedded_size=6
             max_i = train_df.iloc[i, j].max()
             if max_i > max_amp:
                 max_amp = max_i
+    if pretrain:
+        for i in range(pretrain_df.shape[0]):
+            for j in range(12):
+                max_i = train_df.iloc[i, j].max()
+                if max_i > max_amp:
+                    max_amp = max_i
 
     print('max_amp:', max_amp)
+
+    #preprocess pretrain_df
+    if pretrain:
+        signals_list = pretrain_df.apply(preprocessing_pretrain, axis=1, args=(max_amp,)).to_list()
+        pretrain_signals = np.stack(signals_list, axis=0).astype(np.float32)  # shape: (N, C, L)
+
     # Preprocess train, val, and test
     X_train, y_train = zip(*train_df.apply(preprocessing, axis=1, args=(max_amp,)))
+    # X_train=np.stack(X_train.to_list(), axis=0).astype(np.float32)
     X_val, y_val = zip(*val_df.apply(preprocessing, axis=1, args=(max_amp,)))
+    # X_val = np.stack(X_val.to_list(), axis=0).astype(np.float32)
     X_test, y_test = zip(*test_df.apply(preprocessing, axis=1, args=(max_amp,)))
+    # X_test = np.stack(X_test.to_list(), axis=0).astype(np.float32)
 
     # Create Datasets
     train_dataset = ECGDataset(X_train, y_train)
@@ -115,15 +135,18 @@ def main_train_test(pretrain_signals, pre_train_labels, data_df, embedded_size=6
     best_val_auc = -1.0
     best_metrics = {}
         
-    encoder = ECG_Encoder(signal_length=signal_length, embedded_size=embedded_size, CL_embedded_size=CL_embedded_size, kernel_size=kernel_size, dropout=dropout, seed=seed).to(device)
+    encoder = ECG_CNN_Encoder(signal_length=signal_length, embedded_size=embedded_size,
+                          CL_embedded_size=CL_embedded_size, kernel_size=kernel_size,
+                          dropout=dropout, seed=seed).to(device)
 
     if pretrain: 
         print('pretraining started ...')
 
         if pretrain_encoder_path==None:
-            pretrain_dataset = ECGDataset(pretrain_signals, pre_train_labels)
-            pretrain_loader = DataLoader(pretrain_dataset, batch_size=pre_batch_size, shuffle=True, num_workers=4)
-            encoder_path = f"{encoder_name}_aug1_{augmentation1}_ratio_{aug1_ratio}_agu2_{augmentation2}_ratio_{aug2_ratio}_domain_{domain}_epoch_{pretrain_num_epochs}_num_{len(pretrain_signals)}_batchsize_{pre_batch_size}_clemb_{CL_embedded_size}_cltemp_{cl_temp}.pth"
+            pretrain_dataset = ECGDataset_pretrain(pretrain_signals)
+            pretrain_loader = DataLoader(pretrain_dataset, batch_size=pre_batch_size, shuffle=True, num_workers=1)
+            os.makedirs("saved_encoders/", exist_ok=True)
+            encoder_path = f"saved_encoders/{encoder_name}_aug1_{augmentation1}_ratio_{aug1_ratio}_agu2_{augmentation2}_ratio_{aug2_ratio}_domain_{domain}_epoch_{pretrain_num_epochs}_num_{len(pretrain_signals)}_batchsize_{pre_batch_size}_clemb_{CL_embedded_size}_cltemp_{cl_temp}.pth"
             print(f'encoder path: {encoder_path}')
             print()
         else:
@@ -148,7 +171,7 @@ def main_train_test(pretrain_signals, pre_train_labels, data_df, embedded_size=6
                 print()
                 encoder.train() 
                 cl_loss = 0.0
-                for signals, _ in pretrain_loader:
+                for signals in pretrain_loader:
                     signals = signals.to(device)
                     if domain != 'time':
                         signal_length = signals.shape[-1]
@@ -374,13 +397,11 @@ def main_train_test(pretrain_signals, pre_train_labels, data_df, embedded_size=6
     return best_metrics, best_test_metrics
 
 
-def cross_val_main(pretrain_signals, pre_train_labels, data_df, print_seed_results=True, record_seed_results=True, pretrain_num_epochs=50, num_epochs=60, embedded_size=64, kernel_size=15, dropout = 0.1, CL_embedded_size=64, domain='time', cl_temp=None,  augmentation1='dropout',  aug1_ratio=0.20, augmentation2='guassian_noise', aug2_ratio=0.15,  encoder_name='CL_encoder', pre_batch_size=128, batch_size=128, pretrain_encoder_path=None, pretrain=True):
+def cross_val_main(pretrain_df, data_df, print_seed_results=True, record_seed_results=True, pretrain_num_epochs=50, num_epochs=60, embedded_size=64, kernel_size=15, dropout = 0.1, CL_embedded_size=64, domain='time', cl_temp=None,  augmentation1='dropout',  aug1_ratio=0.20, augmentation2='guassian_noise', aug2_ratio=0.15,  encoder_name='CL_encoder', pre_batch_size=128, batch_size=128, pretrain_encoder_path=None, pretrain=True):
 
     print(f'domain is {domain}')
     best_metrics_dict = {'epoch':[], 'test_accuracy': [], 'test_precision': [], 'test_recall': [], 'test_precision':[], 'test_recall':[], 'test_f1': [], 'test_auc': [], 'test_pr_auc':[]}
-    #seeds= [42, 123, 51, 10, 12]
-    #seeds= [42, 123, 51, 15, 12]
-    seeds= [321, 123, 51, 15, 12, 1234, 999]
+    seeds= [321, 123, 51]
     for seed in seeds:
         random.seed(seed)
         np.random.seed(seed)
@@ -389,7 +410,7 @@ def cross_val_main(pretrain_signals, pre_train_labels, data_df, print_seed_resul
             torch.cuda.manual_seed(seed)
 
 
-        best_metrics, best_test_metrics = main_train_test(pretrain_signals, pre_train_labels, data_df, embedded_size=embedded_size, kernel_size=kernel_size, dropout=dropout, CL_embedded_size=CL_embedded_size, pretrain_num_epochs=pretrain_num_epochs, num_epochs=num_epochs, print_results = False, save_results = False, plot_results = False, seed=seed, cl_temp=cl_temp,  augmentation1=augmentation1,  aug1_ratio=aug1_ratio, augmentation2=augmentation2, aug2_ratio=aug2_ratio, domain =domain , exp_name=None, encoder_name=encoder_name, pre_batch_size=pre_batch_size, batch_size=batch_size, pretrain_encoder_path=pretrain_encoder_path, pretrain=pretrain)
+        best_metrics, best_test_metrics = main_train_test(pretrain_df, data_df, embedded_size=embedded_size, kernel_size=kernel_size, dropout=dropout, CL_embedded_size=CL_embedded_size, pretrain_num_epochs=pretrain_num_epochs, num_epochs=num_epochs, print_results = False, save_results = False, plot_results = False, seed=seed, cl_temp=cl_temp,  augmentation1=augmentation1,  aug1_ratio=aug1_ratio, augmentation2=augmentation2, aug2_ratio=aug2_ratio, domain =domain , exp_name=None, encoder_name=encoder_name, pre_batch_size=pre_batch_size, batch_size=batch_size, pretrain_encoder_path=pretrain_encoder_path, pretrain=pretrain)
 
         print(f'----seed={seed} is done')
         best_metrics_dict['epoch'].append(best_metrics['epoch'])
@@ -439,68 +460,119 @@ def cross_val_main(pretrain_signals, pre_train_labels, data_df, print_seed_resul
     return final_metric_dict
 
 
+def get_len(x):
+    try:
+        a = np.asarray(x)
+        if a.dtype == object and a.size == 1:
+            a = np.asarray(a.flatten()[0])
+        if a.ndim > 1 and 1 in a.shape:
+            a = np.squeeze(a)
+        return a.size if a.ndim == 1 else 0
+    except:
+        return 0
 
 
 
-# load pretraining unlabled data
-train_files = glob.glob('/Volumes/research/ecg_echo/echo_data/train_abnormal_ecgs/*')#[1:25]
-test_files = glob.glob('/Volumes/research/ecg_echo/echo_data/test_abnormal_ecgs/*')#[1:25]
+def main(print_seed_results=True, 
+     record_seed_results=False,
+     pretrain_num_epochs=50, 
+     num_epochs=20, 
+     embedded_size=256, 
+     kernel_size=15, 
+     dropout = 0.3,
+     CL_embedded_size=128, 
+     domain='time', 
+     cl_temp=0.07,
+     augmentation1='guassian_noise',  
+     aug1_ratio=0.05, 
+     augmentation2='guassian_noise', 
+     aug2_ratio=0.25,
+     encoder_name='CL_CNN_encoder', 
+     pre_batch_size=150, 
+     batch_size=1024, 
+     pretrain_encoder_path=None, 
+     pretrain=False,
+     pretrain_dir="/gold/KUMC_DATA/clean_ecg/unlabeled_dataset/",
+     data_dir='/gold/KUMC_DATA/clean_ecg/labeled_dataset_merged.parquet'):
 
-tfrecord_files = train_files
-pretrain_signals = []
-pre_train_labels = []
-raw_dataset = tf.data.TFRecordDataset(tfrecord_files)
-for raw_record in raw_dataset:
-    signal, label = parse_tfr_element(raw_record)
-    pretrain_signals.append(signal)
-    pre_train_labels.append(label)
+    pretrain_df=None
+    if pretrain:
+        print('\npreprocess pretrain data ...')
+        parquet_files = glob.glob(os.path.join(pretrain_dir, "**", "*.parquet"), recursive=True)[:2]
+        dfs = []
+        for p in parquet_files:
+            try:
+                df_i = pd.read_parquet(p)
+                dfs.append(df_i)
+            except Exception as e:
+                print(f"Warning: failed to read {p!r}: {e}")
+        pretrain_df = pd.concat(dfs, ignore_index=True, sort=False)
+        print(f"pretrain_df loaded with shape: {pretrain_df.shape}")
+        print(f'num unique patients {pretrain_df.mrn_pseudo.nunique()}')
+        cols = ['full_lead_I', 'full_lead_II', 'full_lead_III', 'full_lead_AVR', 'full_lead_AVL', 'full_lead_AVF',
+             'full_lead_V1', 'full_lead_V2', 'full_lead_V3', 'full_lead_V4', 'full_lead_V5', 'full_lead_V6',
+             'mrn_pseudo']
+        pretrain_df = pretrain_df.dropna(subset=cols)
+        print('dropping duplicates ==>', pretrain_df.shape)
+        print(f'num unique patients {pretrain_df.mrn_pseudo.nunique()}')
+        pretrain_df = pretrain_df[cols]
+        mask = pretrain_df.iloc[:, :12].map(get_len).ge(5000).all(axis=1)
+        pretrain_df = pretrain_df[mask].reset_index(drop=True)
+        print('dropping bad rows ==>', pretrain_df.shape)
 
-tfrecord_files = test_files
-raw_dataset = tf.data.TFRecordDataset(tfrecord_files)
-for raw_record in raw_dataset:
-    signal, label = parse_tfr_element(raw_record)
-    pretrain_signals.append(signal)
-    pre_train_labels.append(label)
+    mlflow.sklearn.autolog(disable=True)
+
+    #some data processing
+    print('\npreprocess labled data ...')
+    data_df = pd.read_parquet(data_dir)
+    #data_df['DOS'] = pd.to_datetime(data_df['DOS'])
+    data_df.sort_values(by=['mrn_pseudo'], ascending=False, inplace=True)
+    print(data_df.shape)
+    print(f'num unique patients {data_df.mrn_pseudo.nunique()}')
+    data_df = data_df.dropna(subset=['abnormal'])
+    print('dropping duplicates ==>',data_df.shape)
+    print(f'num unique patients {data_df.mrn_pseudo.nunique()}')
+    print(f'lable ratio {data_df[data_df["abnormal"] == 1].shape[0] / data_df.shape[0]}')
+    # Check if any patient has multiple labels
+    mixed_label_patients = data_df.groupby('mrn_pseudo')['abnormal'].nunique()
+    mixed_label_patients = mixed_label_patients[mixed_label_patients > 1]
+    print()
+    # Print problematic patients
+    print("Patients with mixed labels:\n", len(mixed_label_patients))
+    print()
+
+    data_df = data_df[['full_lead_I', 'full_lead_II', 'full_lead_III', 'full_lead_AVR', 'full_lead_AVL', 'full_lead_AVF',
+                       'full_lead_V1', 'full_lead_V2', 'full_lead_V3', 'full_lead_V4', 'full_lead_V5', 'full_lead_V6', 'abnormal', 'mrn_pseudo']]
+    mask = data_df.iloc[:, :12].map(get_len).ge(5000).all(axis=1)
+    data_df = data_df[mask].reset_index(drop=True)
+    print('dropping bad rows ==>', data_df.shape)
 
 
+    final_metric_dict = cross_val_main(pretrain_df=pretrain_df, data_df=data_df, print_seed_results=print_seed_results, record_seed_results=record_seed_results,
+                                       pretrain_num_epochs=pretrain_num_epochs, num_epochs=num_epochs, embedded_size=embedded_size, kernel_size=kernel_size, dropout = dropout,
+                                       CL_embedded_size=CL_embedded_size, domain=domain, cl_temp=cl_temp,
+                                       augmentation1=augmentation1,  aug1_ratio=aug1_ratio, augmentation2=augmentation2, aug2_ratio=aug2_ratio,
+                                       encoder_name=encoder_name, pre_batch_size=pre_batch_size, batch_size=batch_size, pretrain_encoder_path=pretrain_encoder_path, pretrain=pretrain)
 
-mlflow.sklearn.autolog(disable=True)
-
-file_path = '/Volumes/research/ecg_echo/echo_data/PRE_CRT_ecgs_processed.pkl'
-#PRE_CRT_ecgs_processed
-#CRT_data_processed
-#CRT_ecgs_processed_4
-with open(file_path, 'rb') as f:
-    data_df = pickle.load(f)
-
-#ata_df = pd.read_csv('/Volumes/research/ecg_echo/echo_data/CRT_data_processed_fixed.csv', index_col=0)
-print(data_df.shape)
-#data_df = data_df[data_df['full_error_processing']==False]
-print(data_df.shape)
-
-data_df['DOS'] = pd.to_datetime(data_df['DOS'])
-# Check the type of data
-# data_df.sort_values(by=['mrn', 'DOS'], inplace=True)
-data_df.sort_values(by=['mrn', 'DOS'], ascending=False, inplace=True)
-# data_df.drop_duplicates(subset=['PatientNum'], keep='first', inplace=True)
-print(data_df.shape)
-print(f'num unique patients {data_df.mrn.nunique()}')
-data_df = data_df.dropna(subset=['Responder'])
-
-print(data_df.shape)
-print(f'num unique patients {data_df.mrn.nunique()}')
-
-print(f'lable ratio {data_df[data_df["Responder"] == 1].shape[0] / data_df.shape[0]}')
-
-
-# Check if any patient has multiple labels
-mixed_label_patients = data_df.groupby('mrn')['Responder'].nunique()
-mixed_label_patients = mixed_label_patients[mixed_label_patients > 1]
-print()
-# Print problematic patients
-print("Patients with mixed labels:\n", mixed_label_patients)
-print()
-
-data_df = data_df[['full_lead_I', 'full_lead_II', 'full_lead_III', 'full_lead_AVR', 'full_lead_AVL', 'full_lead_AVF', 'full_lead_V1', 'full_lead_V2', 'full_lead_V3', 'full_lead_V4', 'full_lead_V5', 'full_lead_V6', 'Responder', 'mrn']]
-
-final_metric_dict = cross_val_main(pretrain_signals, pre_train_labels, data_df, print_seed_results=True, record_seed_results=False,  pretrain_num_epochs=50, num_epochs=100, embedded_size=256, kernel_size=15, dropout = 0.3, CL_embedded_size=128, domain='time', cl_temp=0.07,  augmentation1='guassian_noise',  aug1_ratio=0.05, augmentation2='guassian_noise', aug2_ratio=0.25,  encoder_name='CL_CNN_encoder', pre_batch_size=150, batch_size=128, pretrain_encoder_path=None, pretrain=True)
+main(print_seed_results=True, 
+     record_seed_results=False,
+     pretrain_num_epochs=50, 
+     num_epochs=20, 
+     embedded_size=256, 
+     kernel_size=15, 
+     dropout = 0.3,
+     CL_embedded_size=128, 
+     domain='time', 
+     cl_temp=0.07,
+     augmentation1='guassian_noise',  
+     aug1_ratio=0.05, 
+     augmentation2='guassian_noise', 
+     aug2_ratio=0.25,
+     encoder_name='CL_CNN_encoder', 
+     pre_batch_size=150, 
+     batch_size=1024, 
+     pretrain_encoder_path=None, 
+     pretrain=False,
+     pretrain_dir="/gold/KUMC_DATA/clean_ecg/unlabeled_dataset/",
+     data_dir='/gold/KUMC_DATA/clean_ecg/labeled_dataset_merged.parquet'
+     )
