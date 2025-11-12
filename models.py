@@ -279,9 +279,9 @@ class Attention(nn.Module):
         return context_vector, attention_weights
 
 
-class ECG_CNN_LSTM_Encoder(nn.Module):
+class ECG_CNN_LSTM_Attention_Encoder(nn.Module):
     def __init__(self, signal_length=5000, embedded_size=256, CL_embedded_size=128, kernel_size=15, dropout=0.1, alpha=0.1, lstm_layers=2, seed=42):
-        super(ECG_CNN_LSTM_Encoder, self).__init__()
+        super(ECG_CNN_LSTM_Attention_Encoder, self).__init__()
 
         # Set seed
         random.seed(seed)
@@ -481,9 +481,9 @@ class ECG_CNN_LSTM_Residual(nn.Module):
 ########################################
 
 
-class ECG_Encoder(nn.Module):
+class ECG_CNN_TRANSFORMER_Encoder(nn.Module):
     def __init__(self, signal_length=5000, embedded_size=256, CL_embedded_size=64, kernel_size=15, dropout=0.1, alpha=0.1, num_layers=2, nhead=4, dim_feedforward=256, seed=42):
-        super(ECG_Encoder, self).__init__()
+        super(ECG_CNN_TRANSFORMER_Encoder, self).__init__()
 
         # Set seed
         random.seed(seed)
