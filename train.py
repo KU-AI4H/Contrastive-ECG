@@ -448,9 +448,12 @@ def cross_val_main(pretrain_df, data_df, print_seed_results=True, record_seed_re
             print()
 
     if record_seed_results:
-        model_name = 'ECG_CNN_1D'  # Change this to your model name
-        file_name = f'{encoder_name}_aug1_{augmentation1}_ratio_{aug1_ratio}_agu2_{augmentation2}_ratio_{aug2_ratio}_domain_{domain}_epoch_{pretrain_num_epochs}_num_pre_{len(pretrain_signals)}_prebatchsize_{pre_batch_size}_clemb_{CL_embedded_size}_cltemp_{cl_temp}_emb_{embedded_size}_num_finetune_data_{len(data_df)}.txt'
-        save_folder = os.path.join(os.getcwd(), model_name, 'results')
+        if pretrain:
+            file_name = f'{ecg_encoder_type}_aug1_{augmentation1}_ratio_{aug1_ratio}_agu2_{augmentation2}_ratio_{aug2_ratio}_domain_{domain}_epoch_{pretrain_num_epochs}_num_pre_{len(pretrain_signals)}_prebatchsize_{pre_batch_size}_clemb_{CL_embedded_size}_cltemp_{cl_temp}_emb_{embedded_size}_num_finetune_data_{len(data_df)}.txt'
+        else:
+            file_name = ecg_encoder_type
+
+        save_folder = os.path.join(os.getcwd(), ecg_encoder_type, 'results')
         if not os.path.exists(save_folder):
             os.makedirs(save_folder)
         with open(os.path.join(save_folder, file_name), 'w') as file:
@@ -573,7 +576,7 @@ main(print_seed_results=True,
      record_seed_results=True,
      pretrain_num_epochs=50,
      ecg_encoder_type='ECG_CNN_Encoder', #ECG_CNN_Encoder, ECG_CNN_LSTM_Encoder,ECG_CNN_LSTM_Attention_Encoder, ECG_CNN_TRANSFORMER_Encoder
-     num_epochs=10,
+     num_epochs=40,
      embedded_size=256,
      kernel_size=15,
      dropout = 0.3,
