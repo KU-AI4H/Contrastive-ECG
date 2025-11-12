@@ -9,13 +9,13 @@ import pickle
 import pandas as pd
 import numpy as np
 import mlflow
-from models import ECG_CNN_Encoder, ECG_Classifier
+from models import ECG_CNN_Encoder, ECG_CNN_LSTM_Encoder,ECG_CNN_LSTM_Attention_Encoder, ECG_CNN_TRANSFORMER_Encoder, ECG_Classifier
 from utils import set_seed, preprocessing, preprocessing_pretrain, ECGDataset, ECGDataset_pretrain, DataLoader, NTXentLoss, ecg_to_frequency_domain, record_metrics, save_metrics, plot_metrics, calculate_confidence_interval_error
 from sklearn.model_selection import train_test_split
 from CL_augmentations import *
 import glob
 
-def main_train_test(pretrain_df, data_df,
+def main_train_test(pretrain_df, data_df,ecg_encoder_type='ECG_CNN_Encoder',
                     embedded_size=64, kernel_size=15, dropout=0.1, CL_embedded_size=64, pretrain_num_epochs=50, num_epochs=70,
                     print_results = False, save_results = False, plot_results = False, seed=42,
                     cl_temp=0.07, augmentation1='dropout',  aug1_ratio=0.20, augmentation2='guassian_noise', aug2_ratio=0.15, domain ='time',
@@ -110,7 +110,7 @@ def main_train_test(pretrain_df, data_df,
 
 
     # Initialize device, model, criterion, and optimizer
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
     print(f'device: {device}')
     if domain == 'time':
         signal_length=5000
@@ -134,10 +134,23 @@ def main_train_test(pretrain_df, data_df,
 
     best_val_auc = -1.0
     best_metrics = {}
-        
-    encoder = ECG_CNN_Encoder(signal_length=signal_length, embedded_size=embedded_size,
+
+    if ecg_encoder_type == 'ECG_CNN_Encoder':
+        encoder = ECG_CNN_Encoder(signal_length=signal_length, embedded_size=embedded_size,
                           CL_embedded_size=CL_embedded_size, kernel_size=kernel_size,
                           dropout=dropout, seed=seed).to(device)
+    elif ecg_encoder_type=='ECG_CNN_LSTM_Encoder':
+        encoder = ECG_CNN_LSTM_Encoder(signal_length=signal_length, embedded_size=embedded_size,
+                                  CL_embedded_size=CL_embedded_size, kernel_size=kernel_size, lstm_layers=1,
+                                  dropout=dropout, seed=seed).to(device)
+    elif ecg_encoder_type == 'ECG_CNN_LSTM_Attention_Encoder':
+        encoder = ECG_CNN_LSTM_Attention_Encoder(signal_length=signal_length, embedded_size=embedded_size,
+                                       CL_embedded_size=CL_embedded_size, kernel_size=kernel_size, lstm_layers=1,
+                                       dropout=dropout, seed=seed).to(device)
+    elif ecg_encoder_type == 'ECG_CNN_TRANSFORMER_Encoder':
+        encoder = ECG_CNN_TRANSFORMER_Encoder(signal_length=signal_length, embedded_size=embedded_size,
+                                       CL_embedded_size=CL_embedded_size, kernel_size=kernel_size, alpha=0.1, num_layers=1, nhead=2,
+                                       dropout=dropout, seed=seed).to(device)
 
     if pretrain: 
         print('pretraining started ...')
@@ -397,7 +410,7 @@ def main_train_test(pretrain_df, data_df,
     return best_metrics, best_test_metrics
 
 
-def cross_val_main(pretrain_df, data_df, print_seed_results=True, record_seed_results=True, pretrain_num_epochs=50, num_epochs=60, embedded_size=64, kernel_size=15, dropout = 0.1, CL_embedded_size=64, domain='time', cl_temp=None,  augmentation1='dropout',  aug1_ratio=0.20, augmentation2='guassian_noise', aug2_ratio=0.15,  encoder_name='CL_encoder', pre_batch_size=128, batch_size=128, pretrain_encoder_path=None, pretrain=True):
+def cross_val_main(pretrain_df, data_df, print_seed_results=True, record_seed_results=True, ecg_encoder_type='ECG_CNN_Encoder', pretrain_num_epochs=50, num_epochs=60, embedded_size=64, kernel_size=15, dropout = 0.1, CL_embedded_size=64, domain='time', cl_temp=None,  augmentation1='dropout',  aug1_ratio=0.20, augmentation2='guassian_noise', aug2_ratio=0.15,  encoder_name='CL_encoder', pre_batch_size=128, batch_size=128, pretrain_encoder_path=None, pretrain=True):
 
     print(f'domain is {domain}')
     best_metrics_dict = {'epoch':[], 'test_accuracy': [], 'test_precision': [], 'test_recall': [], 'test_precision':[], 'test_recall':[], 'test_f1': [], 'test_auc': [], 'test_pr_auc':[]}
@@ -410,7 +423,7 @@ def cross_val_main(pretrain_df, data_df, print_seed_results=True, record_seed_re
             torch.cuda.manual_seed(seed)
 
 
-        best_metrics, best_test_metrics = main_train_test(pretrain_df, data_df, embedded_size=embedded_size, kernel_size=kernel_size, dropout=dropout, CL_embedded_size=CL_embedded_size, pretrain_num_epochs=pretrain_num_epochs, num_epochs=num_epochs, print_results = False, save_results = False, plot_results = False, seed=seed, cl_temp=cl_temp,  augmentation1=augmentation1,  aug1_ratio=aug1_ratio, augmentation2=augmentation2, aug2_ratio=aug2_ratio, domain =domain , exp_name=None, encoder_name=encoder_name, pre_batch_size=pre_batch_size, batch_size=batch_size, pretrain_encoder_path=pretrain_encoder_path, pretrain=pretrain)
+        best_metrics, best_test_metrics = main_train_test(pretrain_df, data_df, ecg_encoder_type=ecg_encoder_type, embedded_size=embedded_size, kernel_size=kernel_size, dropout=dropout, CL_embedded_size=CL_embedded_size, pretrain_num_epochs=pretrain_num_epochs, num_epochs=num_epochs, print_results = False, save_results = False, plot_results = False, seed=seed, cl_temp=cl_temp,  augmentation1=augmentation1,  aug1_ratio=aug1_ratio, augmentation2=augmentation2, aug2_ratio=aug2_ratio, domain =domain , exp_name=None, encoder_name=encoder_name, pre_batch_size=pre_batch_size, batch_size=batch_size, pretrain_encoder_path=pretrain_encoder_path, pretrain=pretrain)
 
         print(f'----seed={seed} is done')
         best_metrics_dict['epoch'].append(best_metrics['epoch'])
@@ -473,24 +486,25 @@ def get_len(x):
 
 
 
-def main(print_seed_results=True, 
+def main(print_seed_results=True,
      record_seed_results=False,
-     pretrain_num_epochs=50, 
-     num_epochs=20, 
-     embedded_size=256, 
-     kernel_size=15, 
+     pretrain_num_epochs=50,
+     ecg_encoder_type='ECG_CNN_Encoder',
+     num_epochs=20,
+     embedded_size=256,
+     kernel_size=15,
      dropout = 0.3,
-     CL_embedded_size=128, 
-     domain='time', 
+     CL_embedded_size=128,
+     domain='time',
      cl_temp=0.07,
-     augmentation1='guassian_noise',  
-     aug1_ratio=0.05, 
-     augmentation2='guassian_noise', 
+     augmentation1='guassian_noise',
+     aug1_ratio=0.05,
+     augmentation2='guassian_noise',
      aug2_ratio=0.25,
-     encoder_name='CL_CNN_encoder', 
-     pre_batch_size=150, 
-     batch_size=1024, 
-     pretrain_encoder_path=None, 
+     encoder_name='CL_CNN_encoder',
+     pre_batch_size=150,
+     batch_size=1024,
+     pretrain_encoder_path=None,
      pretrain=False,
      pretrain_dir="/gold/KUMC_DATA/clean_ecg/unlabeled_dataset/",
      data_dir='/gold/KUMC_DATA/clean_ecg/labeled_dataset_merged.parquet'):
@@ -549,29 +563,31 @@ def main(print_seed_results=True,
 
 
     final_metric_dict = cross_val_main(pretrain_df=pretrain_df, data_df=data_df, print_seed_results=print_seed_results, record_seed_results=record_seed_results,
+                                       ecg_encoder_type=ecg_encoder_type,
                                        pretrain_num_epochs=pretrain_num_epochs, num_epochs=num_epochs, embedded_size=embedded_size, kernel_size=kernel_size, dropout = dropout,
                                        CL_embedded_size=CL_embedded_size, domain=domain, cl_temp=cl_temp,
                                        augmentation1=augmentation1,  aug1_ratio=aug1_ratio, augmentation2=augmentation2, aug2_ratio=aug2_ratio,
                                        encoder_name=encoder_name, pre_batch_size=pre_batch_size, batch_size=batch_size, pretrain_encoder_path=pretrain_encoder_path, pretrain=pretrain)
 
-main(print_seed_results=True, 
-     record_seed_results=False,
-     pretrain_num_epochs=50, 
-     num_epochs=20, 
-     embedded_size=256, 
-     kernel_size=15, 
+main(print_seed_results=True,
+     record_seed_results=True,
+     pretrain_num_epochs=50,
+     ecg_encoder_type='ECG_CNN_Encoder', #ECG_CNN_Encoder, ECG_CNN_LSTM_Encoder,ECG_CNN_LSTM_Attention_Encoder, ECG_CNN_TRANSFORMER_Encoder
+     num_epochs=10,
+     embedded_size=256,
+     kernel_size=15,
      dropout = 0.3,
-     CL_embedded_size=128, 
-     domain='time', 
+     CL_embedded_size=128,
+     domain='time',
      cl_temp=0.07,
-     augmentation1='guassian_noise',  
-     aug1_ratio=0.05, 
-     augmentation2='guassian_noise', 
+     augmentation1='guassian_noise',
+     aug1_ratio=0.05,
+     augmentation2='guassian_noise',
      aug2_ratio=0.25,
-     encoder_name='CL_CNN_encoder', 
-     pre_batch_size=150, 
-     batch_size=1024, 
-     pretrain_encoder_path=None, 
+     encoder_name='CL_CNN_encoder',
+     pre_batch_size=150,
+     batch_size=1024,
+     pretrain_encoder_path=None,
      pretrain=False,
      pretrain_dir="/gold/KUMC_DATA/clean_ecg/unlabeled_dataset/",
      data_dir='/gold/KUMC_DATA/clean_ecg/labeled_dataset_merged.parquet'
